@@ -53,19 +53,9 @@ val using : prepare_for_await:(unit -> t) -> while_running:(unit -> 'a) -> 'a
 
 (** {2 Per thread configuration} *)
 
-(** Signature for a minimal subset of the [Stdlib.Thread] module needed by
-    domain local await. *)
-module type Thread = sig
-  type t
+include module type of Thread_intf
 
-  val self : unit -> t
-  val id : t -> int
-end
-
-type 'handle thread = (module Thread with type t = 'handle)
-(** Type alias for a first-class {!Thread} module. *)
-
-val per_thread : 'handle thread -> unit
+val per_thread : (module Thread) -> unit
 (** [per_thread (module Thread)] configures the current domain to store and
     select the trigger mechanism per systhread.  This can be called at most once
     per domain.

@@ -29,14 +29,7 @@ module Default = struct
       { release; await }
 end
 
-module type Thread = sig
-  type t
-
-  val self : unit -> t
-  val id : t -> int
-end
-
-type 'handle thread = (module Thread with type t = 'handle)
+include Thread_intf
 
 module IdMap = Map.Make (Int)
 
@@ -53,7 +46,7 @@ type config =
 
 let key = Domain.DLS.new_key @@ fun () -> Per_domain (Default.init ())
 
-let per_thread (type handle) ((module Thread) : handle thread) =
+let per_thread ((module Thread) : (module Thread)) =
   match Domain.DLS.get key with
   | Per_thread _ ->
       failwith "Domain_local_await: per_thread called twice on a single domain"
