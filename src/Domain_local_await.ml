@@ -38,13 +38,16 @@ end
 
 type 'handle thread = (module Thread with type t = 'handle)
 
+module IdMap = Map.Make (Int)
+
 type config =
   | Per_domain : (unit -> t) -> config
   | Per_thread : {
       default : unit -> t;
       self : unit -> 'handle;
       id : 'handle -> int;
-      id_to_prepare : (int, unit -> t) Hashtbl.t;
+      mutable id_to_prepare : (unit -> t) IdMap.t;
+          (** Accessed from a single domain, but multiple threads. *)
     }
       -> config
 
@@ -56,7 +59,7 @@ let per_thread (type handle) ((module Thread) : handle thread) =
       failwith "Domain_local_await: per_thread called twice on a single domain"
   | Per_domain default ->
       let open Thread in
-      let id_to_prepare = Hashtbl.create ~random:true 16 in
+      let id_to_prepare = IdMap.empty in
       Domain.DLS.set key (Per_thread { default; self; id; id_to_prepare })
 
 let using ~prepare_for_await ~while_running =
@@ -65,16 +68,26 @@ let using ~prepare_for_await ~while_running =
       let current = Per_domain prepare_for_await in
       Domain.DLS.set key current;
       Fun.protect while_running ~finally:(fun () -> Domain.DLS.set key previous)
-  | Per_thread { self; id; id_to_prepare; _ } ->
-      let id = id (self ()) in
-      Hashtbl.add id_to_prepare id prepare_for_await;
-      Fun.protect while_running ~finally:(fun () ->
-          Hashtbl.remove id_to_prepare id)
+  | Per_thread r ->
+      let id = r.id (r.self ()) in
+      let rec add () =
+        let before = r.id_to_prepare in
+        let after = IdMap.add id prepare_for_await before in
+        if r.id_to_prepare == before then r.id_to_prepare <- after else add ()
+      in
+      add ();
+      let rec remove () =
+        let before = r.id_to_prepare in
+        let after = IdMap.remove id before in
+        if r.id_to_prepare == before then r.id_to_prepare <- after
+        else remove ()
+      in
+      Fun.protect while_running ~finally:remove
 
 let prepare_for_await () =
   match Domain.DLS.get key with
   | Per_domain default -> default ()
-  | Per_thread { default; id; self; id_to_prepare } -> (
-      match Hashtbl.find id_to_prepare (id (self ())) with
+  | Per_thread r -> (
+      match IdMap.find (r.id (r.self ())) r.id_to_prepare with
       | prepare -> prepare ()
-      | exception Not_found -> default ())
+      | exception Not_found -> r.default ())
