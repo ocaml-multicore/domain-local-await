@@ -36,6 +36,7 @@ Let's implement a simple awaitable atomic location abstraction. First we need
 the domain local await library:
 
 ```ocaml
+# #thread
 # #require "domain-local-await"
 ```
 
@@ -113,14 +114,8 @@ To test awaitable locations, let's first create a location:
 val x : int awaitable_atomic = <abstr>
 ```
 
-And let's then create a thread
-
-```ocaml
-# #thread
-```
-
-that awaits until the value of the location has changed and then modifies the
-value of the location:
+And let's then create a thread that awaits until the value of the location has
+changed and then modifies the value of the location:
 
 ```ocaml
 # let a_thread =

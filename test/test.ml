@@ -1,3 +1,8 @@
+let rec push r x =
+  let before = !r in
+  let after = x :: before in
+  if !r == before then r := after else push r x
+
 let test_all_threads_are_woken_up () =
   let n = ref 2 in
 
@@ -10,7 +15,7 @@ let test_all_threads_are_woken_up () =
     ()
     |> Thread.create @@ fun () ->
        let t = Domain_local_await.prepare_for_await () in
-       awaiters := t.release :: !awaiters;
+       push awaiters t.release;
        decr n;
        if !n = 0 then barrier.release ();
        t.await ()
