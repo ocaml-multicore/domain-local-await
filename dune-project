@@ -10,5 +10,6 @@
  (synopsis "A scheduler independent blocking mechanism")
  (depends
   (ocaml (>= 5.0))
+  (thread-table (>= 0.1.0))
   (mdx (and (>= 1.10.0) :with-test))))
 (using mdx 0.2)

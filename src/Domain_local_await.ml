@@ -31,16 +31,13 @@ end
 
 include Thread_intf
 
-module IdMap = Map.Make (Int)
-
 type config =
   | Per_domain : (unit -> t) -> config
   | Per_thread : {
       default : unit -> t;
       self : unit -> 'handle;
       id : 'handle -> int;
-      mutable id_to_prepare : (unit -> t) IdMap.t;
-          (** Accessed from a single domain, but multiple threads. *)
+      id_to_prepare : (unit -> t) Thread_table.t;
     }
       -> config
 
@@ -52,7 +49,7 @@ let per_thread ((module Thread) : (module Thread)) =
       failwith "Domain_local_await: per_thread called twice on a single domain"
   | Per_domain default ->
       let open Thread in
-      let id_to_prepare = IdMap.empty in
+      let id_to_prepare = Thread_table.create () in
       Domain.DLS.set key (Per_thread { default; self; id; id_to_prepare })
 
 let using ~prepare_for_await ~while_running =
@@ -63,24 +60,14 @@ let using ~prepare_for_await ~while_running =
       Fun.protect while_running ~finally:(fun () -> Domain.DLS.set key previous)
   | Per_thread r ->
       let id = r.id (r.self ()) in
-      let rec add () =
-        let before = r.id_to_prepare in
-        let after = IdMap.add id prepare_for_await before in
-        if r.id_to_prepare == before then r.id_to_prepare <- after else add ()
-      in
-      add ();
-      let rec remove () =
-        let before = r.id_to_prepare in
-        let after = IdMap.remove id before in
-        if r.id_to_prepare == before then r.id_to_prepare <- after
-        else remove ()
-      in
-      Fun.protect while_running ~finally:remove
+      Thread_table.add r.id_to_prepare id prepare_for_await;
+      Fun.protect while_running ~finally:(fun () ->
+          Thread_table.remove r.id_to_prepare id)
 
 let prepare_for_await () =
   match Domain.DLS.get key with
   | Per_domain default -> default ()
   | Per_thread r -> (
-      match IdMap.find (r.id (r.self ())) r.id_to_prepare with
+      match Thread_table.find r.id_to_prepare (r.id (r.self ())) with
       | prepare -> prepare ()
       | exception Not_found -> r.default ())

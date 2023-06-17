@@ -1,3 +1,4 @@
 (library
  (name Domain_local_await)
- (public_name domain-local-await))
+ (public_name domain-local-await)
+ (libraries thread-table))
