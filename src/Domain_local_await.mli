@@ -58,7 +58,7 @@ include module type of Thread_intf
 val per_thread : (module Thread) -> unit
 (** [per_thread (module Thread)] configures the current domain to store and
     select the trigger mechanism per systhread.  This can be called at most once
-    per domain.
+    per domain before any calls to {!prepare_for_await}.
 
     The reason why this is an opt-in feature is that this allows domain local
     await to be implemented without depending on [Thread] which also depends on
