@@ -88,10 +88,11 @@ let per_thread ((module Thread) : (module Thread)) =
 
 let using ~prepare_for_await ~while_running =
   match Domain.DLS.get key with
-  | Per_domain _ as previous ->
-      let current = Per_domain { prepare_for_await } in
-      Domain.DLS.set key current;
-      Fun.protect while_running ~finally:(fun () -> Domain.DLS.set key previous)
+  | Per_domain r ->
+      let previous = r.prepare_for_await in
+      r.prepare_for_await <- prepare_for_await;
+      Fun.protect while_running ~finally:(fun () ->
+          r.prepare_for_await <- previous)
   | Per_thread r ->
       let id = r.id (r.self ()) in
       Thread_table.add r.id_to_prepare id prepare_for_await;
