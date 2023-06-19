@@ -32,30 +32,64 @@ end
 include Thread_intf
 
 type config =
-  | Per_domain : (unit -> t) -> config
+  | Per_domain : { mutable prepare_for_await : unit -> t } -> config
   | Per_thread : {
-      default : unit -> t;
+      mutable prepare_for_await : unit -> t;
       self : unit -> 'handle;
       id : 'handle -> int;
       id_to_prepare : (unit -> t) Thread_table.t;
     }
       -> config
 
-let key = Domain.DLS.new_key @@ fun () -> Per_domain (Default.init ())
+let default_init = ref (fun () -> failwith "unimplemented")
+let default () = !default_init ()
+
+let key =
+  Domain.DLS.new_key @@ fun () -> Per_domain { prepare_for_await = default }
+
+(* Below we use [@poll error] to ensure that there are no safe-points where
+   thread switches might occur during critical section. *)
+
+let[@poll error] update_prepare_atomically state prepare_for_await =
+  match state with
+  | Per_domain r ->
+      let current = r.prepare_for_await in
+      if current == default then begin
+        r.prepare_for_await <- prepare_for_await;
+        prepare_for_await
+      end
+      else current
+  | Per_thread r ->
+      let current = r.prepare_for_await in
+      if current == default then begin
+        r.prepare_for_await <- prepare_for_await;
+        prepare_for_await
+      end
+      else current
+
+let () =
+  default_init :=
+    fun () ->
+      let prepare_for_await = Default.init () in
+      let prepare_for_await =
+        update_prepare_atomically (Domain.DLS.get key) prepare_for_await
+      in
+      prepare_for_await ()
 
 let per_thread ((module Thread) : (module Thread)) =
   match Domain.DLS.get key with
   | Per_thread _ ->
       failwith "Domain_local_await: per_thread called twice on a single domain"
-  | Per_domain default ->
+  | Per_domain { prepare_for_await } ->
       let open Thread in
       let id_to_prepare = Thread_table.create () in
-      Domain.DLS.set key (Per_thread { default; self; id; id_to_prepare })
+      Domain.DLS.set key
+        (Per_thread { prepare_for_await; self; id; id_to_prepare })
 
 let using ~prepare_for_await ~while_running =
   match Domain.DLS.get key with
   | Per_domain _ as previous ->
-      let current = Per_domain prepare_for_await in
+      let current = Per_domain { prepare_for_await } in
       Domain.DLS.set key current;
       Fun.protect while_running ~finally:(fun () -> Domain.DLS.set key previous)
   | Per_thread r ->
@@ -66,8 +100,8 @@ let using ~prepare_for_await ~while_running =
 
 let prepare_for_await () =
   match Domain.DLS.get key with
-  | Per_domain default -> default ()
+  | Per_domain r -> r.prepare_for_await ()
   | Per_thread r -> (
       match Thread_table.find r.id_to_prepare (r.id (r.self ())) with
       | prepare -> prepare ()
-      | exception Not_found -> r.default ())
+      | exception Not_found -> r.prepare_for_await ())
