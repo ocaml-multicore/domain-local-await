@@ -34,8 +34,11 @@ let test_all_threads_are_woken_up () =
 
   threads |> List.iter Thread.join
 
-let () =
+let basics () =
   test_all_threads_are_woken_up ();
   Domain_local_await.per_thread (module Thread);
-  test_all_threads_are_woken_up ();
-  ()
+  test_all_threads_are_woken_up ()
+
+let () =
+  Alcotest.run "Domain_local_await"
+    [ ("basics", [ Alcotest.test_case "" `Quick basics ]) ]
