@@ -11,5 +11,6 @@
  (depends
   (ocaml (>= 4.12.0))
   (thread-table (>= 0.1.0))
+  (alcotest (and (>= 1.7.0) :with-test))
   (mdx (and (>= 1.10.0) :with-test))))
 (using mdx 0.2)
