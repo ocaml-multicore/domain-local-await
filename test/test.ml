@@ -1,7 +1,14 @@
+let[@poll error] push_atomically r before after =
+  !r == before
+  && begin
+       r := after;
+       true
+     end
+
 let rec push r x =
   let before = !r in
   let after = x :: before in
-  if !r == before then r := after else push r x
+  if not (push_atomically r before after) then push r x
 
 let test_all_threads_are_woken_up () =
   let n = ref 2 in
