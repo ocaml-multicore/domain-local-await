@@ -5,7 +5,7 @@
 (authors "Vesa Karvonen <vesa.a.j.k@gmail.com>")
 (maintainers "Vesa Karvonen <vesa.a.j.k@gmail.com>")
 (homepage "https://github.com/ocaml-multicore/domain-local-await")
-(license "0BSD")
+(license "ISC")
 (package (name domain-local-await)
  (synopsis "A scheduler independent blocking mechanism")
  (depends
