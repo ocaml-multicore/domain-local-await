@@ -76,7 +76,7 @@ let () =
       in
       prepare_for_await ()
 
-let per_thread ((module Thread) : (module Thread)) =
+let per_thread (module Thread : Thread) =
   match Domain.DLS.get key with
   | Per_thread _ ->
       failwith "Domain_local_await: per_thread called twice on a single domain"
