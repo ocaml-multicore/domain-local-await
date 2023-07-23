@@ -11,20 +11,23 @@ module Default = struct
     fun () ->
       let released = ref false in
       let release () =
-        if not !released then (
+        if not !released then begin
           Mutex.lock t.mutex;
-          if not !released then (
+          if not !released then begin
             released := true;
             Mutex.unlock t.mutex;
-            Condition.broadcast t.condition)
-          else Mutex.unlock t.mutex)
+            Condition.broadcast t.condition
+          end
+          else Mutex.unlock t.mutex
+        end
       and await () =
-        if not !released then (
+        if not !released then begin
           Mutex.lock t.mutex;
           while not !released do
             Condition.wait t.condition t.mutex
           done;
-          Mutex.unlock t.mutex)
+          Mutex.unlock t.mutex
+        end
       in
       { release; await }
 end
@@ -102,7 +105,8 @@ let using ~prepare_for_await ~while_running =
 let prepare_for_await () =
   match Domain.DLS.get key with
   | Per_domain r -> r.prepare_for_await ()
-  | Per_thread r -> (
+  | Per_thread r -> begin
       match Thread_table.find r.id_to_prepare (r.id (r.self ())) with
       | prepare -> prepare ()
-      | exception Not_found -> r.prepare_for_await ())
+      | exception Not_found -> r.prepare_for_await ()
+    end
