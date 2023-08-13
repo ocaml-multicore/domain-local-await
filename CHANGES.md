@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.0
+
+- Internal improvements (@polytypic)
+- Change license to ISC from 0BSD (@tarides)
+
 ## 0.2.1
 
 - Support OCaml 4.12.0+ (@polytypic)
