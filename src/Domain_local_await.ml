@@ -50,10 +50,11 @@ let default () = !default_init ()
 let key =
   Domain.DLS.new_key @@ fun () -> Per_domain { prepare_for_await = default }
 
-(* Below we use [@poll error] to ensure that there are no safe-points where
-   thread switches might occur during critical section. *)
+(* Below we use [@poll error] and [@inline never] to ensure that there are no
+   safe-points where thread switches might occur during critical section. *)
 
-let[@poll error] update_prepare_atomically state prepare_for_await =
+let[@poll error] [@inline never] update_prepare_atomically state
+    prepare_for_await =
   match state with
   | Per_domain r ->
       let current = r.prepare_for_await in

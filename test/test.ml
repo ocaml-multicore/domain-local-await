@@ -1,4 +1,4 @@
-let[@poll error] push_atomically r before after =
+let[@poll error] [@inline never] push_atomically r before after =
   !r == before
   && begin
        r := after;
