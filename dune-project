@@ -11,7 +11,7 @@
  (description "A low level mechanism intended for writing higher level libraries that need to block in a scheduler friendly manner.")
  (depends
   (ocaml (>= 4.12.0))
-  (thread-table (>= 0.1.0))
+  (thread-table (>= 1.0.0))
   (alcotest (and (>= 1.7.0) :with-test))
   (mdx (and (>= 1.10.0) :with-test))))
 (using mdx 0.2)
