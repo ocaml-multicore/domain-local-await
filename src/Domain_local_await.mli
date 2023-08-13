@@ -1,4 +1,24 @@
-(** A scheduler independent blocking mechanism. *)
+(** A scheduler independent blocking mechanism.
+
+    This is designed as a low level mechanism intended for writing higher level
+    libraries that need to block in a scheduler friendly manner.
+
+    A library that needs to suspend and later resume the current thread of
+    execution may simply call {!prepare_for_await} to obtain a pair of [await]
+    and [release] operations for the purpose.
+
+    To provide an efficient and scheduler friendly implementation of the
+    mechanism, schedulers may install an implementation by wrapping the
+    scheduler main loop with a call to {!using}.  The implementation is then
+    stored in a domain, and optionally thread, local variable.  The overhead
+    that this imposes on a scheduler should be insignificant.
+
+    An application can the choose to use schedulers that provide the necessary
+    implementation.  An implementation that works with plain domains and threads
+    is provided as a default.
+
+    The end result is effective interoperability between schedulers and
+    concurrent programming libraries. *)
 
 (** {1 Interface for blocking} *)
 
