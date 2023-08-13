@@ -2,27 +2,37 @@
 
 # **domain-local-await** &mdash; Scheduler independent blocking
 
-This library provides a scheduler independent blocking mechanism.
+A low level mechanism intended for writing higher level libraries that need to
+block in a scheduler friendly manner.
 
-> **NOTE**: Unless you are e.g. working on implementing an effects based
-> scheduler or lock-free algorithms, then this is probably not what you are
-> looking for. This is a low level mechanism intended for internal use by higher
-> level libraries for concurrent programming and is likely to be replaced by an
-> official standard blocking mechanism in the future.
+A library that needs to suspend and later resume the current thread of execution
+may simply call
+[`prepare_for_await`](https://ocaml-multicore.github.io/domain-local-await/doc/domain-local-await/Domain_local_await/index.html#val-prepare_for_await)
+to obtain a pair of
+[`await`](https://ocaml-multicore.github.io/domain-local-await/doc/domain-local-await/Domain_local_await/index.html#type-t.await)
+and
+[`release`](https://ocaml-multicore.github.io/domain-local-await/doc/domain-local-await/Domain_local_await/index.html#type-t.release)
+operations for the purpose.
 
-The idea behind domain local await (DLA) is to allow one to create blocking
-operations that can work with any scheduler that provides the mechanism by
-[registering a function](https://ocaml-multicore.github.io/domain-local-await/doc/domain-local-await/Domain_local_await/index.html#val-using)
-for the current domain (or, if desired, the current systhread within a domain)
-to support blocking while the scheduler is running. In addition, domain local
-await provides a default implementation that works with plain domains and
-systhreads.
+To provide an efficient and scheduler friendly implementation of the mechanism,
+schedulers may install an implementation by wrapping the scheduler main loop
+with a call to
+[`using`](https://ocaml-multicore.github.io/domain-local-await/doc/domain-local-await/Domain_local_await/index.html#val-using).
+The implementation is then stored in a domain, and optionally thread, local
+variable. The overhead that this imposes on a scheduler should be insignificant.
+
+An application can the choose to use schedulers that provide the necessary
+implementation. An implementation that works with plain domains and threads is
+provided as a default.
+
+The end result is effective interoperability between schedulers and concurrent
+programming libraries.
 
 ## References
 
 DLA is used to implement blocking operations by the following libraries:
 
-- [kcas](https://github.com/ocaml-multicore/kcas)
+- [Kcas](https://ocaml-multicore.github.io/kcas/)
 
 DLA support is provided by the following schedulers:
 

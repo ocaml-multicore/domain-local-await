@@ -8,6 +8,7 @@
 (license "ISC")
 (package (name domain-local-await)
  (synopsis "A scheduler independent blocking mechanism")
+ (description "A low level mechanism intended for writing higher level libraries that need to block in a scheduler friendly manner.")
  (depends
   (ocaml (>= 4.12.0))
   (thread-table (>= 0.1.0))
