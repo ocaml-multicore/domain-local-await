@@ -35,7 +35,7 @@ type t = {
 }
 (** Represents an asynchronous trigger.
 
-    {b NOTE}: {!release} and {!await} should be domain safe and ideally
+    {b NOTE}: {!release} and {!await} should be parallelism-safe and ideally
     optimized with the assumption that {!release} may be called multiple times
     and even before {!await} is called.  Furthermore, {!await} may be called at
     most once. *)
