@@ -6,6 +6,7 @@
 (maintainers "Vesa Karvonen <vesa.a.j.k@gmail.com>")
 (homepage "https://github.com/ocaml-multicore/domain-local-await")
 (license "ISC")
+(implicit_transitive_deps false)
 (package (name domain-local-await)
  (synopsis "A scheduler independent blocking mechanism")
  (description "A low level mechanism intended for writing higher level libraries that need to block in a scheduler friendly manner.")
