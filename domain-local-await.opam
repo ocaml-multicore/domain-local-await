@@ -14,6 +14,7 @@ depends: [
   "thread-table" {>= "1.0.0"}
   "alcotest" {>= "1.7.0" & with-test}
   "mdx" {>= "2.3.0" & with-test}
+  "domain_shims" {>= "0.1.0" & with-test}
   "odoc" {with-doc}
 ]
 build: [
