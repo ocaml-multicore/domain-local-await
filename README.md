@@ -172,7 +172,7 @@ simple. It could be optimized slightly to reduce allocations and proper
 propagation of exception backtraces should be implemented. It could also be
 useful to have a scheduler independent mechanism to get a unique id
 corresponding to the current fiber, systhread, or domain and store that in the
-lazy state to be able to given an error in case of recursive forcing.
+lazy state to be able to give an error in case of recursive forcing.
 
 ## Example: Awaitable atomic locations
 
@@ -199,7 +199,7 @@ the awaiters to wake them up after a successful modification:
 # let rec fetch_and_add x n =
     let (i, awaiters) as was = Atomic.get x in
       if Atomic.compare_and_set x was (i+n, []) then begin
-          List.iter (fun awaiter -> awaiter ()) awaiters;
+          List.iter ((|>) ()) awaiters;
           i
         end
       else
@@ -217,15 +217,15 @@ for an awaitable location to have a specific value:
     match fn v with
     | Some w -> w
     | None ->
-      let t = Domain_local_await.prepare_for_await () in
-      if Atomic.compare_and_set x was (v, t.release :: awaiters) then
-        match t.await () with
+      let dla = Domain_local_await.prepare_for_await () in
+      if Atomic.compare_and_set x was (v, dla.release :: awaiters) then
+        match dla.await () with
         | () -> get_as fn x
         | exception cancelation_exn ->
           let rec cleanup () =
             let (w, awaiters) as was = Atomic.get x in
             if v == w then
-              let awaiters = List.filter ((!=) t.release) awaiters in
+              let awaiters = List.filter ((!=) dla.release) awaiters in
               if not (Atomic.compare_and_set x was (w, awaiters))
               then cleanup ()
           in
