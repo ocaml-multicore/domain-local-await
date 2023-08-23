@@ -40,21 +40,147 @@ DLA support is provided by the following schedulers:
 - [Domainslib](https://github.com/ocaml-multicore/domainslib) <sup>(>
   0.5.0)</sup>
 
-## Example: Awaitable atomic locations
+## Example: Concurrency-safe lazy
 
-Let's implement a simple awaitable atomic location abstraction. First we need
-the domain local await library:
+At the time of writing this, the documentation of the Stdlib `Lazy` module
+includes the following note:
 
+> Note: `Lazy.force` is not concurrency-safe. If you use this module with
+> multiple fibers, systhreads or domains, then you will need to add some locks.
+
+Let's build a draft of a concurrency-safe version of lazy using atomics and
+domain-local-await!
+
+First we need to require the library:
+
+<!--
 ```ocaml
 # #thread
+# #require "domain_shims"
+```
+-->
+
+```ocaml
 # #require "domain-local-await"
 ```
 
-An awaitable location contains both the current value of the location and a list
-of awaiters, which are just `unit -> unit` functions:
+Here is a pair of types to represent the internal state of a lazy computation:
 
 ```ocaml
-# type 'a awaitable_atomic = ('a * (unit -> unit) list) Atomic.t
+type 'a state =
+  | Fun of (unit -> 'a)
+  | Run of (unit -> unit) list
+  | Val of 'a
+  | Exn of exn
+
+type 'a lazy_t = 'a state Atomic.t
+```
+
+A lazy computation starts as a thunk:
+
+```ocaml
+# let from_fun th = Atomic.make (Fun th)
+val from_fun : (unit -> 'a) -> 'a state Atomic.t = <fun>
+```
+
+Or can be directly constructed with the given value:
+
+```ocaml
+# let from_val v = Atomic.make (Val v)
+val from_val : 'a -> 'a state Atomic.t = <fun>
+```
+
+The interesting bits are in the `force` implementation:
+
+```ocaml
+# let rec force t =
+    match Atomic.get t with
+    | Val v -> v
+    | Exn e -> raise e
+    | Fun th as before ->
+      if Atomic.compare_and_set t before (Run []) then
+        let result =
+          match th () with
+          | v -> Val v
+          | exception e -> Exn e
+        in
+        match Atomic.exchange t result with
+        | (Val _ | Exn _ | Fun _) ->
+          failwith "impossible"
+        | Run waiters ->
+          List.iter ((|>) ()) waiters;
+          force t
+      else
+        force t
+    | Run waiters as before ->
+      let dla = Domain_local_await.prepare_for_await () in
+      let after = Run (dla.release :: waiters) in
+      if Atomic.compare_and_set t before after then
+        match dla.await () with
+        | () ->
+          force t
+        | exception cancelation_exn ->
+          let rec cleanup () =
+            match Atomic.get t with
+            | (Val _ | Exn _ | Fun _) ->
+              ()
+            | Run waiters as before ->
+              let after = Run (List.filter ((!=) dla.release) waiters) in
+              if not (Atomic.compare_and_set t before after) then
+                cleanup ()
+          in
+          cleanup ();
+          raise cancelation_exn
+      else
+        force t
+val force : 'a state Atomic.t -> 'a = <fun>
+```
+
+First `force` examines the state of the lazy computation. In case the result is
+already known, the value is returned or the exception is raised. Otherwise
+either the computation is started or the current thread of execution is
+suspended using domain-local-await. Once the thunk returns, the lazy is updated
+with the new state, any awaiters are released, and then all the `force` attempts
+will retry to examine the result. Notice also that the above `force`
+implementation is careful to perform a `cleanup` in case the `await` call raises
+an exception, which indicates cancellation.
+
+Let's then try it by creating a lazy computation and forcing it from two
+different domains:
+
+```ocaml
+# let hello =
+    from_fun (fun () ->
+    Unix.sleepf 0.25;
+    "Hello!")
+val hello : string state Atomic.t = <abstr>
+
+# let other = Domain.spawn (fun () -> force hello)
+val other : string Domain.t = <abstr>
+
+# force hello
+- : string = "Hello!"
+
+# Domain.join other
+- : string = "Hello!"
+```
+
+Hello, indeed!
+
+Note that the above implementation of lazy is intentionally kept relatively
+simple. It could be optimized slightly to reduce allocations and proper
+propagation of exception backtraces should be implemented. It could also be
+useful to have a scheduler independent mechanism to get a unique id
+corresponding to the current fiber, systhread, or domain and store that in the
+lazy state to be able to given an error in case of recursive forcing.
+
+## Example: Awaitable atomic locations
+
+As a second example, let's implement a simple awaitable atomic location
+abstraction. An awaitable location contains both the current value of the
+location and a list of awaiters, which are just `unit -> unit` functions:
+
+```ocaml
 type 'a awaitable_atomic = ('a * (unit -> unit) list) Atomic.t
 ```
 
@@ -113,7 +239,7 @@ val get_as : ('a -> 'b option) -> ('a * (unit -> unit) list) Atomic.t -> 'b =
 
 Notice that we carefully cleaned up in case the `await` was canceled.
 
-We could, of course, also have operations that potentially await for the
+We could, of course, also have operations that potentially awaits for the
 location to have an acceptable value before attempting modification. Let's leave
 that as an exercise.
 
