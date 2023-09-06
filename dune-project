@@ -1,4 +1,4 @@
-(lang dune 3.3)
+(lang dune 3.8)
 (name domain-local-await)
 (generate_opam_files true)
 (source (github ocaml-multicore/domain-local-await))
@@ -15,5 +15,6 @@
   (thread-table (>= 1.0.0))
   (alcotest (and (>= 1.7.0) :with-test))
   (mdx (and (>= 2.3.0) :with-test))
+  (ocaml-version (and (>= 3.6.1) :with-test))
   (domain_shims (and (>= 0.1.0) :with-test))))
-(using mdx 0.2)
+(using mdx 0.4)
