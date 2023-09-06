@@ -33,6 +33,7 @@ programming libraries.
 - [Example: Concurrency-safe lazy](#example-concurrency-safe-lazy)
 - [Example: Scheduler-friendly Mutex](#example-scheduler-friendly-mutex)
 - [Example: Awaitable atomic locations](#example-awaitable-atomic-locations)
+- [Example: Transparently asynchronous IO](#example-transparently-asynchronous-io)
 - [References](#references)
 
 ## Example: Concurrency-safe lazy
@@ -282,9 +283,9 @@ implementation is also unfair.
 
 ## Example: Awaitable atomic locations
 
-As a second example, let's implement a simple awaitable atomic location
-abstraction. An awaitable location contains both the current value of the
-location and a list of awaiters, which are just `unit -> unit` functions:
+Let's implement a simple awaitable atomic location abstraction. An awaitable
+location contains both the current value of the location and a list of awaiters,
+which are just `unit -> unit` functions:
 
 ```ocaml
 type 'a awaitable_atomic = ('a * (unit -> unit) list) Atomic.t
@@ -388,6 +389,315 @@ Let's then finish by joining with the other thread:
 # Thread.join a_thread
 - : unit = ()
 ```
+
+## Example: Transparently asynchronous IO
+
+As a final example, let's sketch out an implementation of something a bit more
+involved &mdash; transparently asynchronous IO. The idea is that we implement
+operation such as `read` and `write` on Unix file descriptors in such a way that
+they block in a scheduler friendly manner allowing other fibers to run while
+waiting for the IO.
+
+But first, we want to perform certain operations atomically. For that purpose we
+extend the `Atomic` module with a couple of helpers:
+
+```ocaml version>=5.0.0
+module Atomic = struct
+  include Stdlib.Atomic
+
+  let rec update t fn =
+    let before = Atomic.get t in
+    let after = fn before in
+    if Atomic.compare_and_set t before after then
+      before
+    else
+      update t fn
+
+  let modify t fn = update t fn |> ignore
+end
+```
+
+Below is the asynchronous IO module. It exposes `read`, `write`, and `accept`
+operations on Unix file descriptors. The operations block in a scheduler
+friendly manner. The implementation automatically manages a systhread per domain
+that runs a `select` loop, which takes care of awaiting for IO operations to be
+immediately executable. The operations on file descriptors communicate with the
+`select` loop thread.
+
+```ocaml version>=5.0.0
+module Async_io : sig
+  open Unix
+  val read : file_descr -> bytes -> int -> int -> int
+  val write : file_descr -> bytes -> int -> int -> int
+  val accept : ?cloexec:bool -> file_descr -> file_descr * sockaddr
+end = struct
+  module Awaiter = struct
+    type t = { file_descr : Unix.file_descr; release : unit -> unit }
+
+    let file_descr_of t = t.file_descr
+
+    let[@tail_mod_cons] rec signal aws file_descr =
+      match aws with
+      | [] -> ()
+      | aw :: aws ->
+          if aw.file_descr == file_descr then
+            aw.release ()
+          else signal aws file_descr
+
+    let signal_or_wakeup wakeup aws file_descr =
+      if file_descr == wakeup then begin
+        let n = Unix.read file_descr (Bytes.create 1) 0 1 in
+        assert (n = 1)
+      end
+      else signal aws file_descr
+
+    let reject file_descr =
+      List.filter (fun aw -> aw.file_descr != file_descr)
+  end
+
+  type state = {
+    mutable alive : bool;
+    mutable pipe_inn : Unix.file_descr;
+    mutable pipe_out : Unix.file_descr;
+    reading : Awaiter.t list Atomic.t;
+    writing : Awaiter.t list Atomic.t;
+  }
+
+  let key =
+    Domain.DLS.new_key @@ fun () -> {
+      alive = true;
+      pipe_inn = Unix.stdin;
+      pipe_out = Unix.stdin;
+      reading = Atomic.make [];
+      writing = Atomic.make [];
+    }
+
+  let[@poll error] try_lock s =
+    s.pipe_inn == Unix.stdin && begin
+      s.pipe_inn <- Unix.stdout;
+      true
+    end
+
+  let is_locked s =
+    s.pipe_inn == Unix.stdout
+
+  let[@poll error] unlock s pipe_inn pipe_out =
+    s.pipe_inn <- pipe_inn;
+    s.pipe_out <- pipe_out
+
+  let wakeup s =
+    let n = Unix.write s.pipe_out (Bytes.create 1) 0 1 in
+    assert (n = 1)
+
+  let rec init s =
+    if try_lock s then begin
+      let pipe_inn, pipe_out = Unix.pipe ~cloexec:true () in
+      unlock s pipe_inn pipe_out;
+      let t =
+        ()
+        |> Thread.create @@ fun () ->
+           while s.alive do
+             let rs, ws, _ =
+               Unix.select
+                 (s.pipe_inn
+                  :: List.map Awaiter.file_descr_of (Atomic.get s.reading))
+                 (List.map Awaiter.file_descr_of (Atomic.get s.writing))
+                 []
+                 (-1.0)
+             in
+             List.iter
+               (Awaiter.signal_or_wakeup s.pipe_inn (Atomic.get s.reading))
+               rs;
+             List.iter (Awaiter.signal (Atomic.get s.writing)) ws;
+             Atomic.modify s.reading (List.fold_right Awaiter.reject rs);
+             Atomic.modify s.writing (List.fold_right Awaiter.reject ws);
+         done;
+         Unix.close pipe_inn;
+         Unix.close pipe_out
+      in
+      Domain.at_exit @@ fun () ->
+        s.alive <- false;
+        wakeup s;
+        Thread.join t
+    end
+    else if is_locked s then begin
+      Thread.yield ();
+      init s;
+    end
+
+  let get () =
+    let s = Domain.DLS.get key in
+    if s.pipe_inn == Unix.stdin then
+      init s;
+    s
+
+  let await s r file_descr =
+    let Domain_local_await.{ await; release } =
+      Domain_local_await.prepare_for_await ()
+    in
+    let awaiter = Awaiter.{ file_descr; release } in
+    Atomic.modify r (List.cons awaiter);
+    wakeup s;
+    try await ()
+    with cancellation_exn ->
+      Atomic.modify r (List.filter ((!=) awaiter));
+      raise cancellation_exn
+
+  let read file_descr bytes pos len =
+    let s = get () in
+    await s s.reading file_descr;
+    Unix.read file_descr bytes pos len
+
+  let write file_descr bytes pos len =
+    let s = get () in
+    await s s.writing file_descr;
+    Unix.write file_descr bytes pos len
+
+  let accept ?cloexec file_descr =
+    let s = get () in
+    await s s.reading file_descr;
+    Unix.accept ?cloexec file_descr
+end
+```
+
+To demonstrate that we can perform IO operations without blocking the thread we
+implement a very minimalist effects based toy scheduler. We could also use any
+existing scheduler that provides support for domain-local-await
+([see](#references)).
+
+```ocaml version>=5.0.0
+module Toy_scheduler : sig
+  val fiber : (unit -> unit) -> unit
+  val run : (unit -> unit) -> unit
+end = struct
+  type _ Effect.t +=
+    | Suspend : (('a, unit) Effect.Deep.continuation -> unit) -> 'a Effect.t
+
+  let ready = Atomic.make []
+  let count = ref 0
+
+  let fiber thunk =
+    incr count;
+    let thunk () =
+      thunk ();
+      decr count
+    in
+    Atomic.modify ready (List.cons thunk)
+
+  let run program =
+    let needs_wakeup = Atomic.make false in
+    let pipe_inn, pipe_out = Unix.pipe ~cloexec:true () in
+    let rec scheduler work =
+      let effc (type a) : a Effect.t -> _ = function
+        | Suspend ef -> Some ef
+        | _ -> None in
+      Effect.Deep.try_with work () { effc };
+      match Atomic.update ready (function [] -> [] | _::xs -> xs) with
+      | work::_ -> scheduler work
+      | [] ->
+        if !count <> 0 then begin
+          if Atomic.get needs_wakeup then
+            let _ = Unix.select [pipe_inn] [] [] (-1.0) in
+            let n = Unix.read pipe_inn (Bytes.create 1) 0 1 in
+            assert (n = 1)
+          else
+            Atomic.set needs_wakeup true;
+          scheduler Fun.id
+        end
+    in
+    let prepare_for_await _ =
+      let state = Atomic.make `Init in
+      let release () =
+        if Atomic.get state != `Released then
+          match Atomic.exchange state `Released with
+          | `Awaiting k ->
+            let thunk = Effect.Deep.continue k in
+            Atomic.modify ready (List.cons thunk);
+            if Atomic.get needs_wakeup &&
+               Atomic.compare_and_set needs_wakeup true false then
+              let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
+              assert (n = 1)
+          | _ -> () in
+      let await () =
+        if Atomic.get state != `Released then
+          Effect.perform @@ Suspend (fun k ->
+            if not (Atomic.compare_and_set state `Init (`Awaiting k)) then
+              Effect.Deep.continue k ())
+      in
+      Domain_local_await.{ release; await } in
+    Domain_local_await.using
+      ~prepare_for_await
+      ~while_running:(fun () ->
+        incr count;
+        let program () =
+          program ();
+          decr count
+        in
+        scheduler program)
+end
+```
+
+Finally here is an example program that runs a client and a server fiber that
+communicate through sockets:
+
+```ocaml version>=5.0.0
+# Toy_scheduler.run @@ fun () ->
+
+  let n = 100 in
+  let port = Random.int 1000 + 3000 in
+  let server_addr = Unix.ADDR_INET (Unix.inet_addr_loopback, port) in
+
+  let () =
+    Toy_scheduler.fiber @@ fun () ->
+    Printf.printf "  Client running\n%!";
+    let socket = Unix.socket ~cloexec:true PF_INET SOCK_STREAM 0 in
+    Fun.protect ~finally:(fun () -> Unix.close socket) @@ fun () ->
+    Unix.connect socket server_addr;
+    Printf.printf "  Client connected\n%!";
+    let bytes = Bytes.create n in
+    let n = Async_io.write socket bytes 0 (Bytes.length bytes) in
+    Printf.printf "  Client wrote %d\n%!" n;
+    let n = Async_io.read socket bytes 0 (Bytes.length bytes) in
+    Printf.printf "  Client read %d\n%!" n
+  in
+
+  let () =
+    Toy_scheduler.fiber @@ fun () ->
+    Printf.printf "  Server running\n%!";
+    let client, _client_addr =
+      let socket = Unix.socket ~cloexec:true PF_INET SOCK_STREAM 0 in
+      Fun.protect ~finally:(fun () -> Unix.close socket) @@ fun () ->
+      Unix.set_nonblock socket;
+      Unix.bind socket server_addr;
+      Unix.listen socket 1;
+      Printf.printf "  Server listening\n%!";
+      Async_io.accept ~cloexec:true socket
+    in
+    Fun.protect ~finally:(fun () -> Unix.close client) @@ fun () ->
+    Unix.set_nonblock client;
+    let bytes = Bytes.create n in
+    let n = Async_io.read client bytes 0 (Bytes.length bytes) in
+    Printf.printf "  Server read %d\n%!" n;
+    let n = Async_io.write client bytes 0 (n / 2) in
+    Printf.printf "  Server wrote %d\n%!" n
+  in
+
+  Printf.printf "Client server test\n%!"
+Client server test
+  Server running
+  Server listening
+  Client running
+  Client connected
+  Client wrote 100
+  Server read 100
+  Server wrote 50
+  Client read 50
+- : unit = ()
+```
+
+This proof-of-concept shows that using just domain-local-await and a systhread
+we can implement scheduler agnostic transparently asynchronous IO. There is a
+lot of room for optimizations and other kinds of improvements.
 
 ## References
 
