@@ -501,8 +501,8 @@ end = struct
       let t =
         ()
         |> Thread.create @@ fun () ->
-           (* This is IO select loop that performs select and then
-              wakes up fibers blocked on IO. *)
+           (* This is the IO select loop that performs select and
+              then wakes up fibers blocked on IO. *)
            while s.state != `Dead do
              let rs, ws, _ =
                Unix.select
@@ -612,7 +612,7 @@ end = struct
             assert (n = 1)
           else
             (* There are blocked fibers, so we need to wait for
-               them to becom ready.  But we need to check the
+               them to become ready.  But we need to check the
                ready list once more before we do so. *)
             Atomic.set needs_wakeup true;
           scheduler ()
