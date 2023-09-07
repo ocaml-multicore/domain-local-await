@@ -394,9 +394,9 @@ Let's then finish by joining with the other thread:
 
 As a final example, let's sketch out an implementation of something a bit more
 involved &mdash; transparently asynchronous IO. The idea is that we implement
-operation such as `read` and `write` on Unix file descriptors in such a way that
-they block in a scheduler friendly manner allowing other fibers to run while
-waiting for the IO.
+operations such as `read` and `write` on Unix file descriptors in such a way
+that they block in a scheduler friendly manner allowing other fibers to run
+while waiting for the IO.
 
 But first, we want to perform certain operations atomically. For that purpose we
 extend the `Atomic` module with a couple of helpers:
@@ -561,7 +561,7 @@ end
 ```
 
 To demonstrate that we can perform IO operations without blocking the thread we
-implement a very minimalist effects based toy scheduler. We could also use any
+implement a very minimalistic effects based toy scheduler. We could also use any
 existing scheduler that provides support for domain-local-await
 ([see](#references)).
 
