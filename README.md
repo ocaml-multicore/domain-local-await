@@ -653,6 +653,10 @@ end = struct
 end
 ```
 
+The toy scheduler and the async IO implementation do not depend on each other
+and, more generally, know nothing about each other. They simply _interoperate_
+through the use of domain-local-await!
+
 Finally here is an example program that runs a client and a server fiber that
 communicate through sockets:
 
