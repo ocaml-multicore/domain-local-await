@@ -436,7 +436,7 @@ end = struct
 
     let file_descr_of t = t.file_descr
 
-    let[@tail_mod_cons] rec signal aws file_descr =
+    let rec signal aws file_descr =
       match aws with
       | [] -> ()
       | aw :: aws ->
@@ -456,8 +456,7 @@ end = struct
   end
 
   type state = {
-    mutable alive : bool;
-    mutable pipe_inn : Unix.file_descr;
+    mutable state : [ `Init | `Locked | `Alive | `Dead ];
     mutable pipe_out : Unix.file_descr;
     reading : Awaiter.t list Atomic.t;
     writing : Awaiter.t list Atomic.t;
@@ -465,48 +464,56 @@ end = struct
 
   let key =
     Domain.DLS.new_key @@ fun () -> {
-      alive = true;
-      pipe_inn = Unix.stdin;
-      pipe_out = Unix.stdin;
+      state = `Init;
+      pipe_out =
+        (* Unfortunately we cannot safely allocate a pipe here,
+           so we use stdin as a dummy value. *)
+        Unix.stdin;
       reading = Atomic.make [];
       writing = Atomic.make [];
     }
 
   let[@poll error] try_lock s =
-    s.pipe_inn == Unix.stdin && begin
-      s.pipe_inn <- Unix.stdout;
+    s.state == `Init && begin
+      s.state <- `Locked;
       true
     end
 
-  let is_locked s =
-    s.pipe_inn == Unix.stdout
+  let needs_init s =
+    s.state != `Alive
 
-  let[@poll error] unlock s pipe_inn pipe_out =
-    s.pipe_inn <- pipe_inn;
-    s.pipe_out <- pipe_out
+  let[@poll error] unlock s pipe_out =
+    s.pipe_out <- pipe_out;
+    s.state <- `Alive
 
   let wakeup s =
     let n = Unix.write s.pipe_out (Bytes.create 1) 0 1 in
     assert (n = 1)
 
   let rec init s =
+    (* DLS initialization may be run multiple times, so we
+       perform more involved initialization here. *)
     if try_lock s then begin
+      (* The pipe is used to wake up the select after changing
+         the lists of reading and writing file descriptors. *)
       let pipe_inn, pipe_out = Unix.pipe ~cloexec:true () in
-      unlock s pipe_inn pipe_out;
+      unlock s pipe_out;
       let t =
         ()
         |> Thread.create @@ fun () ->
-           while s.alive do
+           (* This is IO select loop that performs select and then
+              wakes up fibers blocked on IO. *)
+           while s.state != `Dead do
              let rs, ws, _ =
                Unix.select
-                 (s.pipe_inn
+                 (pipe_inn
                   :: List.map Awaiter.file_descr_of (Atomic.get s.reading))
                  (List.map Awaiter.file_descr_of (Atomic.get s.writing))
                  []
                  (-1.0)
              in
              List.iter
-               (Awaiter.signal_or_wakeup s.pipe_inn (Atomic.get s.reading))
+               (Awaiter.signal_or_wakeup pipe_inn (Atomic.get s.reading))
                rs;
              List.iter (Awaiter.signal (Atomic.get s.writing)) ws;
              Atomic.modify s.reading (List.fold_right Awaiter.reject rs);
@@ -516,18 +523,18 @@ end = struct
          Unix.close pipe_out
       in
       Domain.at_exit @@ fun () ->
-        s.alive <- false;
+        s.state <- `Dead;
         wakeup s;
         Thread.join t
     end
-    else if is_locked s then begin
+    else if needs_init s then begin
       Thread.yield ();
       init s;
     end
 
   let get () =
     let s = Domain.DLS.get key in
-    if s.pipe_inn == Unix.stdin then
+    if needs_init s then
       init s;
     s
 
@@ -574,35 +581,41 @@ end = struct
     | Suspend : (('a, unit) Effect.Deep.continuation -> unit) -> 'a Effect.t
 
   let ready = Atomic.make []
-  let count = ref 0
+  let num_alive_fibers = ref 0
 
   let fiber thunk =
-    incr count;
+    incr num_alive_fibers;
     let thunk () =
       thunk ();
-      decr count
+      decr num_alive_fibers
     in
     Atomic.modify ready (List.cons thunk)
 
   let run program =
     let needs_wakeup = Atomic.make false in
     let pipe_inn, pipe_out = Unix.pipe ~cloexec:true () in
-    let rec scheduler work =
-      let effc (type a) : a Effect.t -> _ = function
-        | Suspend ef -> Some ef
-        | _ -> None in
-      Effect.Deep.try_with work () { effc };
+    let rec scheduler () =
       match Atomic.update ready (function [] -> [] | _::xs -> xs) with
-      | work::_ -> scheduler work
+      | work::_ ->
+        let effc (type a) : a Effect.t -> _ = function
+          | Suspend ef -> Some ef
+          | _ -> None in
+        Effect.Deep.try_with work () { effc };
+        scheduler ()
       | [] ->
-        if !count <> 0 then begin
+        if !num_alive_fibers <> 0 then begin
           if Atomic.get needs_wakeup then
+            (* There are blocked fibers, so we wait for them to
+               become unblocked. *)
             let _ = Unix.select [pipe_inn] [] [] (-1.0) in
             let n = Unix.read pipe_inn (Bytes.create 1) 0 1 in
             assert (n = 1)
           else
+            (* There are blocked fibers, so we need to wait for
+               them to becom ready.  But we need to check the
+               ready list once more before we do so. *)
             Atomic.set needs_wakeup true;
-          scheduler Fun.id
+          scheduler ()
         end
     in
     let prepare_for_await _ =
@@ -615,6 +628,8 @@ end = struct
             Atomic.modify ready (List.cons thunk);
             if Atomic.get needs_wakeup &&
                Atomic.compare_and_set needs_wakeup true false then
+              (* The scheduler is potentially waiting on select,
+                 so we need to perform a wakeup. *)
               let n = Unix.write pipe_out (Bytes.create 1) 0 1 in
               assert (n = 1)
           | _ -> () in
@@ -628,12 +643,13 @@ end = struct
     Domain_local_await.using
       ~prepare_for_await
       ~while_running:(fun () ->
-        incr count;
+        incr num_alive_fibers;
         let program () =
           program ();
-          decr count
+          decr num_alive_fibers
         in
-        scheduler program)
+        Atomic.modify ready (List.cons program);
+        scheduler ())
 end
 ```
 
