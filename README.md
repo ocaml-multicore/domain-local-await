@@ -21,7 +21,7 @@ with a call to
 The implementation is then stored in a domain, and optionally thread, local
 variable. The overhead that this imposes on a scheduler should be insignificant.
 
-An application can the choose to use schedulers that provide the necessary
+An application can then choose to use schedulers that provide the necessary
 implementation. An implementation that works with plain domains and threads is
 provided as a default.
 
