@@ -664,7 +664,10 @@ communicate through sockets:
 # Toy_scheduler.run @@ fun () ->
 
   let n = 100 in
-  let port = Random.int 1000 + 3000 in
+  let port =
+    Random.self_init ();
+    Random.int 1000 + 3000
+  in
   let server_addr = Unix.ADDR_INET (Unix.inet_addr_loopback, port) in
 
   let () =
