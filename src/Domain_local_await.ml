@@ -23,10 +23,16 @@ module Default = struct
       and await () =
         if not !released then begin
           Mutex.lock t.mutex;
-          while not !released do
-            Condition.wait t.condition t.mutex
-          done;
-          Mutex.unlock t.mutex
+          match
+            while not !released do
+              (* NOTE: [Condition.wait] may raise an asynchronous exception. *)
+              Condition.wait t.condition t.mutex
+            done
+          with
+          | () -> Mutex.unlock t.mutex
+          | exception exn ->
+              Mutex.unlock t.mutex;
+              raise exn
         end
       in
       { release; await }
