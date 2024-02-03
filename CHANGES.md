@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.1
+
+- Add `(implicit_transitive_deps false)` (@polytypic)
+- Fix to unlock mutex even when condition wait raises (@polytypic)
+
 ## 1.0.0
 
 - Internal improvements (@polytypic)
